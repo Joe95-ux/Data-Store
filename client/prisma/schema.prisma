@@ -13,3 +13,330 @@ datasource db {
   url      = "file:./dev.db"
 }
 
+// Prisma schema for Data-Store
+// Purpose: file storage app (S3-backed) with subscriptions & billing
+// Notes: designed to play nicely with NextAuth and Stripe (or other billing provider)
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum FileType {
+  DOCUMENT
+  IMAGE
+  VIDEO
+  OTHER
+}
+
+enum FileStatus {
+  ACTIVE
+  ARCHIVED
+  TRASHED
+}
+
+enum BillingProvider {
+  STRIPE
+  MANUAL
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+}
+
+// -------------------------
+// Auth / NextAuth compatible models
+// -------------------------
+
+model User {
+  id                 String    @id @default(cuid())
+  name               String?
+  email              String    @unique
+  emailVerified      DateTime?
+  image              String?
+  role               Role      @default(USER)
+
+  // NextAuth relations (optional but useful to keep)
+  accounts           Account[]
+  sessions           Session[]
+
+  // App relations
+  files              File[]
+  folders            Folder[]
+  subscriptions      Subscription[]
+  paymentMethods     PaymentMethod[]
+  billingCustomer    BillingCustomer?
+  storageUsages      StorageUsage[]
+  sharedLinks        SharedLink[] @relation("SharedLinkCreator")
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  FileVersion FileVersion[]
+
+  AuditLog AuditLog[]
+}
+
+model Account {
+  id                 String   @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// -------------------------
+// Files, Folders, Versions
+// -------------------------
+
+model Folder {
+  id          String   @id @default(cuid())
+  name        String
+  ownerId     String
+  parentId    String?  // for nested folders
+
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent      Folder?  @relation("FolderToParent", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Folder[] @relation("FolderToParent")
+  files       File[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
+  @@unique([ownerId, parentId, name])
+}
+
+model File {
+  id            String      @id @default(cuid())
+  name          String
+  ownerId       String
+  folderId      String?     // root if null
+  mimeType      String
+  type          FileType    @default(OTHER)
+  status        FileStatus  @default(ACTIVE)
+  size          BigInt
+
+  // S3/Storage info stored on versions; latestVersionId points to current version
+  latestVersionId String?
+
+  owner         User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  folder         Folder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  versions      FileVersion[]
+  latestVersion FileVersion? @relation("LatestFileVersion", fields: [latestVersionId], references: [id], onDelete: SetNull)
+  sharedLinks   SharedLink[]
+  auditLogs     AuditLog[]
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([ownerId])
+  @@index([folderId])
+}
+
+model FileVersion {
+  id           String   @id @default(cuid())
+  fileId       String
+  s3Key        String   // S3 object key
+  etag         String?  // S3 etag or checksum
+  size         BigInt
+  mimeType     String
+  checksum     String?  // optional content hash
+  createdById  String?
+  createdAt    DateTime @default(now())
+
+  file         File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  createdBy    User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([fileId])
+  @@unique([fileId, s3Key])
+  File File[] @relation("LatestFileVersion")
+}
+
+// -------------------------
+// Sharing & Links
+// -------------------------
+
+model SharedLink {
+  id           String   @id @default(cuid())
+  fileId       String
+  creatorId    String
+  token        String   @unique
+  expiresAt    DateTime?
+  maxDownloads Int?     // optional limit
+  downloads    Int      @default(0)
+  passwordHash String?  // if password protected
+  isPublic     Boolean  @default(false)
+
+  file         File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  creator      User     @relation("SharedLinkCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+}
+
+// -------------------------
+// Storage Plans, Subscriptions & Billing
+// -------------------------
+
+model StoragePlan {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  name          String
+  description   String?
+  storageGB     Int      // storage allocation in GB
+  priceCents    Int      // integer price in cents
+  currency      String   @default("USD")
+  isActive      Boolean  @default(true)
+  provider      BillingProvider @default(STRIPE)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model BillingCustomer {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  provider         BillingProvider @default(STRIPE)
+  providerCustomerId String? // e.g., Stripe customer id
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentMethods   PaymentMethod[]
+  invoices         Invoice[]
+
+  createdAt        DateTime @default(now())
+}
+
+model PaymentMethod {
+  id                 String   @id @default(cuid())
+  billingCustomerId  String
+  providerPaymentMethodId String? // e.g., stripe pm id
+  last4              String?
+  brand              String?
+  expMonth           Int?
+  expYear            Int?
+  isDefault          Boolean  @default(false)
+
+  billingCustomer    BillingCustomer @relation(fields: [billingCustomerId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+
+  User User[]
+}
+
+model Subscription {
+  id                 String   @id @default(cuid())
+  userId             String?
+  organizationId     String?  // if later support orgs/teams
+  storagePlanId      String
+  providerSubscriptionId String? // e.g., stripe subscription id
+  status             SubscriptionStatus @default(TRIALING)
+  startedAt          DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean  @default(false)
+
+  user               User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storagePlan        StoragePlan @relation(fields: [storagePlanId], references: [id], onDelete: Restrict)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+  @@index([providerSubscriptionId])
+}
+
+model Invoice {
+  id                 String   @id @default(cuid())
+  billingCustomerId  String
+  providerInvoiceId  String?  // e.g stripe invoice id
+  amountDueCents     Int
+  currency           String   @default("USD")
+  paid               Boolean  @default(false)
+  dueDate            DateTime?
+  data               Json?    // raw invoice payload if needed
+
+  billingCustomer    BillingCustomer @relation(fields: [billingCustomerId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+}
+
+// -------------------------
+// Usage & Quotas
+// -------------------------
+
+model StorageUsage {
+  id           String   @id @default(cuid())
+  userId       String
+  bytesUsed    BigInt
+  snapshotAt   DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, snapshotAt])
+}
+
+// -------------------------
+// Audit & Logs
+// -------------------------
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  fileId       String?
+  action       String   // e.g., "UPLOAD", "DELETE", "SHARE"
+  detail       Json?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  file         File?    @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([fileId])
+}
+
+// -------------------------
+// Soft deletes / trash
+// -------------------------
+
+// Consider application-level soft delete states using File.status; avoid physical deletes
+
+// -------------------------
+// Quick notes:
+// - Use Stripe for billing: store provider ids on BillingCustomer/Subscription/Invoice
+// - For multi-tenant: add Organization model and make files/usage reference orgId
+// - Enforce quotas in app layer using StorageUsage snapshots and middleware
+// -------------------------
+
