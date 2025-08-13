@@ -59,6 +59,8 @@ model User {
   emailVerified      DateTime?
   image              String?
   role               Role      @default(USER)
+  onboardingCompleted Boolean  @default(false)
+  onboardingStep Int?
 
   // NextAuth relations (optional but useful to keep)
   accounts           Account[]
