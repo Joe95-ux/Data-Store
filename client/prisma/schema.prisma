@@ -57,6 +57,7 @@ model User {
   name               String?
   email              String    @unique
   emailVerified      DateTime?
+  hashedPassword     String?
   image              String?
   role               Role      @default(USER)
   onboardingCompleted Boolean  @default(false)
