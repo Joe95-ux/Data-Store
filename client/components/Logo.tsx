@@ -1,26 +1,22 @@
+"use client";
 import { CloudUpload } from "lucide-react";
+import {cn} from "@/lib/utils";
 import Link from "next/link";
 import React from "react";
 
-function Logo() {
-  return (
-    <Link href="/" className="flex items-center gap-2">
-      <CloudUpload className="stroke h-11 w-11 stroke-amber-500 stroke-[1.5]" />
-      <p className="bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-3xl font-bold leading-tight tracking-tighter text-transparent">
-        Data Store
-      </p>
-    </Link>
-  );
-}
+export default function Logo({fontSize= "2xl", iconSize=20}:{fontSize?: string, iconSize?: number}){
+ return(
+  <Link href="/" className={cn("text-xl font-extrabold, flex, items-center, gap-2", fontSize)}>
+    <div className="rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 p-2">
+        <CloudUpload size={iconSize} className="stroke-white" />
+      </div>
+      <div>
+        <span className="bg-gradient-to-r from-emerald-500 to-emerald-600 bg-clip-text text-transparent">
+            Data
+        </span>
+        <span className="text-stone-700 dark:text-stone-300">Store</span>
+      </div>
 
-export function LogoMobile() {
-  return (
-    <Link href="/" className="flex items-center gap-2">
-      <p className="bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-3xl font-bold leading-tight tracking-tighter text-transparent">
-        Data Store
-      </p>
-    </Link>
-  );
+  </Link>
+ )
 }
-
-export default Logo;

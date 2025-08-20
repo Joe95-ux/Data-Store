@@ -1,10 +1,12 @@
 import React from "react";
+import Logo from "@/components/Logo";
 
 const layout = ({children}: {children: React.ReactNode})=>{
     return(
-        <main className="h-full flex justify-center items-center">
+        <div className="h-full flex flex-col justify-center items-center gap-4">
+            <Logo/>
             {children}
-        </main>
+        </div>
     )
 
 }
